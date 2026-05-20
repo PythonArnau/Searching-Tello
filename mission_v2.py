@@ -7,24 +7,107 @@ import random
 import os
 
 # PARAMETERS
-SEARCH_ROTATION = 30
-SEARCH_FORWARD = 75
 CONFIDENCE_THRESHOLD = 0.5
+WALL_THRESHOLD = 80
+FORWARD_SPEED = 30
+LATERAL_DISPLACEMENT = 30
+LATERAL_SPEED = 40         #Negativo: izq, Positivo:der
+LATERAL_TIME = abs(LATERAL_DISPLACEMENT/LATERAL_SPEED)
+YAW_SPEED = 50              # Velocidad de giro (°/s aproximado)
+YAW_TURN = 180
+TURN_TIME = abs(YAW_TURN/YAW_SPEED)             # Segundos para girar ~180° a YAW_SPEED=50
 colors = {}
 RECORDS_DIR = "records"
 record_writer = None
 
-def rotation_iteration(tello):
-    #Mirar un lado y volver
-    tello.rotate_clockwise(SEARCH_ROTATION)
-    tello.rotate_clockwise(SEARCH_ROTATION)
-    tello.rotate_counter_clockwise(2*SEARCH_ROTATION)
-    #Mirar otro lado y volver
-    tello.rotate_counter_clockwise(SEARCH_ROTATION)
-    tello.rotate_counter_clockwise(SEARCH_ROTATION)
-    tello.rotate_clockwise(2*SEARCH_ROTATION)
+sdk_lock = threading.Lock()
+front_tof_cm = -1.0
+tof_thread_active = False
 
-    tello.move_forward(SEARCH_FORWARD)
+rc_lock = threading.Lock()
+
+
+def search(tello, stop_searching):
+    while not stop_searching.is_set():
+        dist = front_tof_cm
+        print(f"Distancia: {dist}")
+
+        if dist < 0:
+            # Fuera de rango fiable: seguir avanzando
+            with rc_lock:
+                tello.send_rc_control(0, FORWARD_SPEED, 0, 0)
+            time.sleep(0.1)
+
+        elif dist > WALL_THRESHOLD:
+            with rc_lock:
+                tello.send_rc_control(0, FORWARD_SPEED, 0, 0)
+            time.sleep(0.1)
+
+        else:
+
+            print("Pared detectada. Frenando...")
+
+            # Freno activo: empuja hacia atrás para contrarrestar inercia
+            t_brake = time.time()
+            while time.time() - t_brake < 0.4 and not stop_searching.is_set():
+                with rc_lock:
+                    tello.send_rc_control(0, -60, 0, 0)
+                time.sleep(0.05)
+
+            with rc_lock:
+                tello.send_rc_control(0, 0, 0, 0)
+            time.sleep(0.5)  # esperar a que el dron esté estable
+
+            print("Iniciando maniobra lateral...")
+            t_start = time.time()
+            while time.time() - t_start < LATERAL_TIME and not stop_searching.is_set():
+                with rc_lock:
+                    tello.send_rc_control(LATERAL_SPEED, 0, 0, 0)
+                time.sleep(0.05)
+
+            with rc_lock:
+                tello.send_rc_control(0, 0, 0, 0)
+            time.sleep(0.5)
+
+            rotate_180_rc(tello, stop_searching)
+            time.sleep(0.5)
+
+    with rc_lock:
+        tello.send_rc_control(0, 0, 0, 0)
+
+def rotate_180_rc(tello, stop_event):
+    start_yaw = tello.get_yaw()
+    target_yaw = (start_yaw + 180) % 360
+
+    t_start = time.time()
+    while not stop_event.is_set():
+        current_yaw = tello.get_yaw()
+        diff = (target_yaw - current_yaw + 360) % 360
+
+        # Si estamos a menos de 10° del objetivo, paramos
+        if diff < 10 or diff > 350:
+            break
+
+        with rc_lock:
+            tello.send_rc_control(0, 0, 0, YAW_SPEED)
+        time.sleep(0.05)
+
+    with rc_lock:
+        tello.send_rc_control(0, 0, 0, 0)
+    time.sleep(0.3)
+
+def tof_loop(tello):
+    global front_tof_cm
+    while tof_thread_active:
+        try:
+            with sdk_lock:
+                raw = tello.send_command_with_return("EXT tof?")
+            if raw and raw.strip().startswith("tof "):
+                dist_mm = int(raw.strip().split()[1])
+                front_tof_cm = -1.0 if dist_mm >= 8190 else dist_mm / 10.0
+        except Exception:
+            pass
+
 
 def mission_loop(tello, object_id, rec):
     # Cargar modelo
@@ -32,8 +115,14 @@ def mission_loop(tello, object_id, rec):
     frame_read = tello.get_frame_read()
 
     # Variables de control
+    global tof_thread_active, rc_lock
     stop_mission = threading.Event()
     target_detected = [False]
+    tof_thread_active = True
+    tof_t = threading.Thread(target=tof_loop, args=(tello,), daemon=True)
+    tof_t.start()
+
+    rc_lock = threading.Lock()
 
     #Grabacion de video
     video_writer = None
@@ -50,18 +139,11 @@ def mission_loop(tello, object_id, rec):
 
     def movement_thread():
         """Hilo secundario: Controla el movimiento sin bloquear el video"""
-        rotation_count = 0
-        while not stop_mission.is_set():
-            # Si NO hemos detectado el objeto, rotamos
-            if not target_detected[0]:
-                try:
-                    rotation_iteration(tello)
 
-                except Exception as e:
-                    print(f"Error en movimiento: {e}")
-
-            # Pequeña pausa para no saturar el procesador
-            time.sleep(0.5)
+        try:
+            search(tello, stop_mission)
+        except Exception as e:
+            print(f"Error en hilo de movimiento: {e}")
 
     # Iniciar el hilo de movimiento
     mover = threading.Thread(target=movement_thread, daemon=True)
@@ -104,6 +186,8 @@ def mission_loop(tello, object_id, rec):
                     target_detected[0] = True
                     print(f"¡OBJETIVO {class_id} ENCONTRADO! Aterrizando...")
                     stop_mission.set()  # Detiene el hilo de movimiento
+                    with rc_lock:
+                        tello.send_rc_control(0, 0, 0, 0)
                     tello.land()
                     break
 
@@ -124,6 +208,7 @@ def mission_loop(tello, object_id, rec):
                 stop_mission.set()
                 break
     finally:
+        tof_thread_active = False
         if video_writer is not None:
             video_writer.release()
 

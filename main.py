@@ -31,7 +31,7 @@ WARNING   = "#ffab00"
 BORDER    = "#1e2330"
 
 # ─────────────────────────────────────────────
-#  Helpers UI
+#  Helpers UI.
 # ─────────────────────────────────────────────
 def set_status(msg, color=TEXT):
     status_var.set(msg)
