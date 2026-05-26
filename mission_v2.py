@@ -6,10 +6,12 @@ import time, datetime
 import random
 import os
 
+import display
+
 # PARAMETERS
 CONFIDENCE_THRESHOLD = 0.5
-WALL_THRESHOLD = 80
-FORWARD_SPEED = 30
+WALL_THRESHOLD = 100
+FORWARD_SPEED = 45
 LATERAL_DISPLACEMENT = 30
 LATERAL_SPEED = 40         #Negativo: izq, Positivo:der
 LATERAL_TIME = abs(LATERAL_DISPLACEMENT/LATERAL_SPEED)
@@ -188,6 +190,7 @@ def mission_loop(tello, object_id, rec):
                     stop_mission.set()  # Detiene el hilo de movimiento
                     with rc_lock:
                         tello.send_rc_control(0, 0, 0, 0)
+                    display.arrived(tello)
                     tello.land()
                     break
 
@@ -200,7 +203,7 @@ def mission_loop(tello, object_id, rec):
 
 
             # Mostrar video (Siempre fluido)
-            cv2.imshow("Tello Detection (Hilo Fluido)", frame_bgr)
+            cv2.imshow("Tello Detection", frame_bgr)
 
             #Grabar Video
 

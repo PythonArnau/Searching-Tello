@@ -5,7 +5,6 @@ import threading
 import time
 import mission_v2
 import detection
-import mission
 # ─────────────────────────────────────────────
 #  Estado global
 # ─────────────────────────────────────────────
