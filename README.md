@@ -170,25 +170,3 @@ records/mission_20240315-143022.mp4
 ```
 
 ---
-
-## Limitaciones conocidas
-
-- El algoritmo de exploración es determinista (no tiene memoria de zonas visitadas)
-- Solo detecta objetos que aparecen en la cámara frontal
-- El drone no construye ningún mapa del entorno
-- Se usa YOLOv8n (el más ligero), con menor precisión en condiciones difíciles
-
----
-
-## Posibles mejoras
-
-- Exploración frontier-based para no repetir zonas ya visitadas
-- Integrar la cámara inferior del Tello para detectar objetos en el suelo
-- Subir a YOLOv8s o YOLOv8m para mayor precisión
-- Odometría simple para construir un mapa de ocupación de la sala
-
----
-
-## Licencia
-
-MIT
